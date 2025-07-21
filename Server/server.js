@@ -13,7 +13,7 @@ const connectDB =require('./config/db')
 
 
 app.use(cors({
-  origin: "https://dvaults.vercel.app/", 
+  origin: "https://dvaults.vercel.app", 
   credentials: true
 }));
 
