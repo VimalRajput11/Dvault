@@ -12,16 +12,16 @@ const PORT=process.env.PORT||4000
 const connectDB =require('./config/db')
 
 
-// app.use(cors({
-//   origin: "https://dvaults.vercel.app", 
-//   credentials: true
-// }));
-
-
 app.use(cors({
-  origin: process.env.CLIENT_URL, 
+  origin: "https://dvaults.vercel.app", 
   credentials: true
 }));
+
+
+// app.use(cors({
+//   origin: process.env.CLIENT_URL, 
+//   credentials: true
+// }));
 
 connectDB();
 app.use('/api/auth', authRoutes);
