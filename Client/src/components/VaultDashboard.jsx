@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Plus, FolderOpen, Trash2, Clock, HardDrive,
   Wallet, ArrowRight, Eye,
@@ -21,7 +21,7 @@ const VaultDashboard = ({ onCreateVault }) => {
   const [selectedVaultId, setSelectedVaultId] = useState(null);
   const [selectedVaultName, setSelectedVaultName] = useState("");
 
-  // 🧠 helper to count non-deleted files (cid !== "")
+  // Helper: Count active files per vault (you may want to optimize this if possible)
   const countActiveFiles = async (contract, vaultId) => {
     const total = await contract.methods.getFileCount(vaultId).call();
     let active = 0;
@@ -32,15 +32,17 @@ const VaultDashboard = ({ onCreateVault }) => {
     return active;
   };
 
+  // Fetch vaults on wallet change
   const fetchVaults = async () => {
+    if (!wallet) return setVaults([]);
+
+    setLoad(true);
     try {
-       if (!wallet) return;
       const { contract } = await initWeb3();
-      const count = await contract.methods.getVaultCount().call();
-     
+      const vaultCount = await contract.methods.getVaultCount().call();
 
       const chainVaults = await Promise.all(
-        [...Array(Number(count)).keys()].map(async (id) => {
+        [...Array(Number(vaultCount)).keys()].map(async (id) => {
           try {
             const v = await contract.methods.getVault(id).call();
             const activeFiles = await countActiveFiles(contract, id);
@@ -50,71 +52,71 @@ const VaultDashboard = ({ onCreateVault }) => {
               description: v.description,
               size: Number(v.size),
               encryptionLevel: v.encryptionLevel,
-              files: activeFiles, // ✅ fixed
+              files: activeFiles,
               storageLimit: v.storageLimit,
               accessType: v.accessType,
               lastAccessed: v.lastAccessed,
               owner: v.owner,
             };
           } catch (err) {
+            // Skip deleted vaults and log unexpected issues
             if (
               err?.message?.includes("Vault deleted") ||
               err?.data?.message?.includes("Vault deleted")
             ) {
               return null;
             }
-            console.error(`❌ Error fetching vault ${id}:`, err);
+            console.error(`Error fetching vault ${id}:`, err);
             return null;
           }
         })
       );
 
-      const filteredVaults = chainVaults.filter((v) => v !== null);
+      // Filter only valid vaults owned by current wallet (case-insensitive)
+      const filteredVaults = chainVaults.filter((v) => !!v);
       const ownedVaults = filteredVaults.filter(
         (v) => v.owner.toLowerCase() === wallet.toLowerCase()
       );
+
       setVaults(ownedVaults);
     } catch (err) {
-      console.error("⚠️  Failed to load vaults:", err);
+      console.error("Failed to load vaults:", err);
       setVaults([]);
     } finally {
       setLoad(false);
     }
   };
 
+  // Run fetchVaults when wallet changes
   useEffect(() => {
-  if (wallet) fetchVaults();
-}, [wallet]);
+    fetchVaults();
+  }, [wallet]);
 
+  // Listen to changes in account or chain and refresh vaults accordingly
+  useEffect(() => {
+    const { ethereum } = window;
+    if (!ethereum) return;
 
-useEffect(() => {
-  const { ethereum } = window;
-  if (!ethereum) return;
+    const handleAccountsChanged = async () => fetchVaults();
+    const handleChainChanged = async () => fetchVaults();
 
-  const handleAccountsChanged = async () => {
-    await fetchVaults();
-  };
+    ethereum.on("accountsChanged", handleAccountsChanged);
+    ethereum.on("chainChanged", handleChainChanged);
 
-  const handleChainChanged = async () => {
-    await fetchVaults();
-  };
+    return () => {
+      ethereum.removeListener("accountsChanged", handleAccountsChanged);
+      ethereum.removeListener("chainChanged", handleChainChanged);
+    };
+  }, []);
 
-  ethereum.on("accountsChanged", handleAccountsChanged);
-  ethereum.on("chainChanged", handleChainChanged);
-
-  return () => {
-    ethereum.removeListener("accountsChanged", handleAccountsChanged);
-    ethereum.removeListener("chainChanged", handleChainChanged);
-  };
-}, []);
-
+  // Delete vault handler
   const handleDeleteVault = async () => {
     if (!selectedVaultId) return;
 
     try {
       const { web3, contract } = await initWeb3();
-      const [account] = await web3.eth.getAccounts();
-      await contract.methods.deleteVault(selectedVaultId).send({ from: account });
+      const accounts = await web3.eth.getAccounts();
+      await contract.methods.deleteVault(selectedVaultId).send({ from: accounts[0] });
       toast.success("Vault deleted!");
       setVaults((prev) => prev.filter((v) => v.id !== selectedVaultId));
     } catch (err) {
@@ -129,8 +131,15 @@ useEffect(() => {
 
   const handleOpenVault = (id) => navigate(`/vault/${id}`);
 
+  // Memoized aggregate stats to avoid recalculations on each render
+  const totalUsedGB = useMemo(() => {
+    const totalBytes = vaults.reduce((acc, v) => acc + (v.size || 0), 0);
+    return (totalBytes / 1024).toFixed(2);
+  }, [vaults]);
 
-  // ───────── UI: LOADING STATE ─────────
+  const totalFiles = useMemo(() => 
+    vaults.reduce((acc, v) => acc + (v.files || 0), 0), [vaults]);
+
   if (isLoading) {
     return (
       <div className="flex justify-center items-center h-screen">
@@ -142,7 +151,6 @@ useEffect(() => {
     );
   }
 
-  // ───────── UI RENDER ─────────
   return (
     <section className="py-20 min-h-screen">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -153,7 +161,6 @@ useEffect(() => {
               Welcome{user?.name ? `, ${user.name}` : ""}
             </h1>
             <p className="text-gray-600 dark:text-gray-400">Manage your encrypted storage vaults</p>
-           
           </div>
           <button
             onClick={onCreateVault}
@@ -164,7 +171,7 @@ useEffect(() => {
           </button>
         </div>
 
-        {/* Wallet alert */}
+        {/* Wallet Alert */}
         {!wallet && (
           <div className="mb-8 p-6 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-2xl flex gap-3 items-start">
             <Wallet className="h-6 w-6 text-yellow-600 dark:text-yellow-400 mt-1" />
@@ -179,7 +186,7 @@ useEffect(() => {
           </div>
         )}
 
-        {/* No vaults */}
+        {/* No Vaults */}
         {vaults.length === 0 ? (
           <div className="text-center py-20">
             <div className="w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-3xl flex items-center justify-center mx-auto mb-6">
@@ -204,134 +211,125 @@ useEffect(() => {
             )}
           </div>
         ) : (
-          /* Vault Cards */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {vaults.map((vault, index) => (
-  <div
-  key={vault.id}
-  onClick={() => handleOpenVault(vault.id)}
-  className="bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full border border-gray-300 dark:border-gray-700 shadow-xl animate-scale-in my-8 mx-auto group cursor-pointer relative overflow-hidden hover:shadow-2xl transform hover:scale-105 transition-all duration-300"
-  style={{ animationDelay: `${index * 100}ms` }}
->
+          <>
+            {/* Vault Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {vaults.map((vault, index) => (
+                <div
+                  key={vault.id}
+                  onClick={() => handleOpenVault(vault.id)}
+                  className="bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full border border-gray-300 dark:border-gray-700 shadow-xl animate-scale-in my-8 mx-auto group cursor-pointer relative overflow-hidden hover:shadow-2xl transform hover:scale-105 transition-all duration-300"
+                  style={{ animationDelay: `${index * 100}ms` }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleOpenVault(vault.id); }}
+                >
+                  {/* Hover Overlay */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-3xl" />
+                  {/* Shimmer hover effect */}
+                  <div className="absolute inset-0 -top-full bg-gradient-to-b from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 group-hover:top-full transition-all duration-1000 transform skew-y-12" />
+                  <div className="relative z-10">
+                    {/* Top Icons */}
+                    <div className="flex justify-between items-center mb-4">
+                      <div className="w-12 h-12 flex items-center justify-center rounded-2xl border border-cyan-500/30 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 group-hover:scale-110 transition-transform duration-300">
+                        <FolderOpen className="h-6 w-6 text-cyan-500" />
+                      </div>
+                      <div className="flex gap-1 animate-pulse">
+                        <span className="w-2 h-2 bg-green-400 rounded-full" />
+                        <span className="w-2 h-2 bg-green-400/50 rounded-full" />
+                        <span className="w-2 h-2 bg-green-400/25 rounded-full" />
+                      </div>
+                    </div>
 
-    {/* Hover overlay */}
-    <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-500 rounded-3xl" />
+                    {/* Vault Info */}
+                    <h3 className="text-xl font-semibold mb-2 text-gray-900 dark:text-white group-hover:text-cyan-500 transition-colors">
+                      {vault.name}
+                    </h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">{vault.description}</p>
 
-    {/* Shimmer hover effect */}
-    <div className="absolute inset-0 -top-full bg-gradient-to-b from-transparent via-white/10 to-transparent opacity-0 group-hover:opacity-100 group-hover:top-full transition-all duration-1000 transform skew-y-12" />
+                    {/* Vault Stats */}
+                    <div className="space-y-2 mb-6 text-sm text-gray-600 dark:text-gray-400">
+                      <div className="flex justify-between">
+                        <div className="flex gap-2 items-center">
+                          <HardDrive className="h-4 w-4" />
+                          <span>{(vault.size / 1024).toFixed(2)} GB</span>
+                        </div>
+                        <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded-full capitalize">
+                          {vault.accessType || 'Private'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-4 w-4" />
+                        <span>
+                          {vault.lastAccessed && !isNaN(Number(vault.lastAccessed))
+                            ? new Date(Number(vault.lastAccessed)).toLocaleString()
+                            : "recently"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-500">
+                        {vault.files || 0} files • {vault.encryptionLevel} • Limit: {vault.storageLimit}GB
+                      </div>
+                    </div>
 
-    <div className="relative z-10">
-      {/* Top Icons */}
-      <div className="flex justify-between items-center mb-4">
-        <div className="w-12 h-12 flex items-center justify-center rounded-2xl border border-cyan-500/30 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 group-hover:scale-110 transition-transform duration-300">
-          <FolderOpen className="h-6 w-6 text-cyan-500" />
-        </div>
-        <div className="flex gap-1 animate-pulse">
-          <span className="w-2 h-2 bg-green-400 rounded-full" />
-          <span className="w-2 h-2 bg-green-400/50 rounded-full" />
-          <span className="w-2 h-2 bg-green-400/25 rounded-full" />
-        </div>
-      </div>
+                    {/* Bottom Buttons */}
+                    <div className="flex justify-between items-center">
+                      <div className="group/button flex items-center space-x-3 px-4 py-2.5 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 hover:from-cyan-500/20 hover:to-blue-500/20 border border-cyan-500/20 hover:border-cyan-500/40 rounded-xl transition-all duration-300 flex-1 mr-3">
+                        <Eye className="h-4 w-4 text-cyan-600 group-hover/button:scale-110 transition-transform" />
+                        <span className="text-sm font-medium text-cyan-700 group-hover/button:text-cyan-600">Open Vault</span>
+                        <ArrowRight className="h-4 w-4 text-cyan-600 group-hover/button:translate-x-1 transition-transform" />
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedVaultId(vault.id);
+                          setSelectedVaultName(vault.name);
+                          setShowDeleteModal(true);
+                        }}
+                        className="p-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 rounded-xl transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0"
+                        title="Delete Vault"
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
 
-      {/* Vault Info */}
-      <h3 className="text-xl font-semibold mb-2 text-gray-900 dark:text-white group-hover:text-cyan-500 transition-colors">
-        {vault.name}
-      </h3>
-      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4 line-clamp-2">{vault.description}</p>
-
-      <div className="space-y-2 mb-6 text-sm text-gray-600 dark:text-gray-400">
-        <div className="flex justify-between">
-          <div className="flex gap-2 items-center">
-            <HardDrive className="h-4 w-4" />
-            <span>{(parseFloat(vault.size || 0) / 1024).toFixed(2)} GB</span>
-          </div>
-          <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded-full capitalize">
-            {vault.accessType || 'Private'}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Clock className="h-4 w-4" />
-          <span>
-         
-            {vault.lastAccessed && !isNaN(Number(vault.lastAccessed))
-              ? new Date(Number(vault.lastAccessed)).toLocaleString()
-              : "recently"}
-          </span>
-        </div>
-        <div className="text-xs text-gray-500 dark:text-gray-500">
-          {vault.files || 0} files • {vault.encryptionLevel} • Limit: {vault.storageLimit}GB
-        </div>
-      </div>
-
-      {/* Bottom Buttons */}
-      <div className="flex justify-between items-center">
-        <div className="group/button flex items-center space-x-3 px-4 py-2.5 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 hover:from-cyan-500/20 hover:to-blue-500/20 border border-cyan-500/20 hover:border-cyan-500/40 rounded-xl transition-all duration-300 flex-1 mr-3">
-          <Eye className="h-4 w-4 text-cyan-600 group-hover/button:scale-110 transition-transform" />
-          <span className="text-sm font-medium text-cyan-700 group-hover/button:text-cyan-600">Open Vault</span>
-          <ArrowRight className="h-4 w-4 text-cyan-600 group-hover/button:translate-x-1 transition-transform" />
-        </div>
-        <button
-         onClick={(e) => {
-  e.stopPropagation();
-  setSelectedVaultId(vault.id);
-  setSelectedVaultName(vault.name);
-  setShowDeleteModal(true);
-}}
-
-          className="p-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 rounded-xl transition-all duration-300 opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0"
-        >
-          <Trash2 className="h-4 w-4 text-red-500" />
-        </button>
-      </div>
-    </div>
-  </div>
-))}
-
-          </div>
+            {/* Aggregate Stats */}
+            <div className="mt-16 bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 border border-gray-300 dark:border-gray-700 shadow-xl">
+              <h3 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">Storage Overview</h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center">
+                <div>
+                  <div className="text-3xl font-bold text-cyan-500 mb-2">{totalUsedGB} GB</div>
+                  <div className="text-gray-600 dark:text-gray-400">Total Used</div>
+                </div>
+                <div>
+                  <div className="text-3xl font-bold text-blue-500 mb-2">{totalFiles}</div>
+                  <div className="text-gray-600 dark:text-gray-400">Total Files</div>
+                </div>
+                <div>
+                  <div className="text-3xl font-bold text-teal-500 mb-2">{vaults.length}</div>
+                  <div className="text-gray-600 dark:text-gray-400">Active Vaults</div>
+                </div>
+                <div>
+                  <div className="text-3xl font-bold text-green-500 mb-2">99.9%</div>
+                  <div className="text-gray-600 dark:text-gray-400">Uptime</div>
+                </div>
+              </div>
+            </div>
+          </>
         )}
 
-        {/* Stats */}
-       {vaults.length > 0 && (
-  <div className="mt-16 bg-white dark:bg-gray-900 rounded-3xl p-6 sm:p-8 border border-gray-300 dark:border-gray-700 shadow-xl">
-    <h3 className="text-2xl font-bold mb-6 text-gray-900 dark:text-white">Storage Overview</h3>
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center">
-      <div>
-        <div className="text-3xl font-bold text-cyan-500 mb-2">
-          {(vaults.reduce((acc, v) => acc + parseFloat(v.size || 0), 0) / 1024).toFixed(2)} GB
-        </div>
-        <div className="text-gray-600 dark:text-gray-400">Total Used</div>
+        <ConfirmDeleteModal
+          isOpen={showDeleteModal}
+          fileName={selectedVaultName}
+          onCancel={() => setShowDeleteModal(false)}
+          onConfirm={handleDeleteVault}
+        />
       </div>
-      <div>
-        <div className="text-3xl font-bold text-blue-500 mb-2">
-          {vaults.reduce((acc, v) => acc + Number(v.files || 0), 0)}
-        </div>
-        <div className="text-gray-600 dark:text-gray-400">Total Files</div>
-      </div>
-      <div>
-        <div className="text-3xl font-bold text-teal-500 mb-2">{vaults.length}</div>
-        <div className="text-gray-600 dark:text-gray-400">Active Vaults</div>
-      </div>
-      <div>
-        <div className="text-3xl font-bold text-green-500 mb-2">99.9%</div>
-        <div className="text-gray-600 dark:text-gray-400">Uptime</div>
-      </div>
-    </div>
-  </div>
-)}
-
-      </div>
-      <ConfirmDeleteModal
-  isOpen={showDeleteModal}
-  fileName={selectedVaultName}
-  onCancel={() => setShowDeleteModal(false)}
-  onConfirm={handleDeleteVault}
-/>
-
     </section>
-    
   );
 };
-
-
 
 export default VaultDashboard;
