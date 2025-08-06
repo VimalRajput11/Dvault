@@ -79,8 +79,9 @@ export default function VaultViewer() {
         })));
       })
       .catch(err => {
-        console.error('Failed to fetch vault data:', err);
-        toast.error("Error fetching vault data");
+         console.error('Access denied or error fetching vault:', err);
+      toast.error("Access denied or invalid vault.");
+      navigate('/dashboard');
       })
       .finally(() => setIsLoading(false));
   }, [vaultId, wallet]);

@@ -19,11 +19,19 @@ export const vaultAPI = {
   },
 
   /* ========== READ SINGLE VAULT (for VaultViewer) ========== */
-  getVault: async (vaultId) => {
-    const { contract } = await initWeb3();
-    const data = await contract.methods.getVault(vaultId).call();
-    return { data: { id: vaultId, ...data } };
-  },
+ getVault: async (vaultId) => {
+  const { web3, contract } = await initWeb3();
+  const [acct]             = await web3.eth.getAccounts();
+  const vault              = await contract.methods.getVault(vaultId).call();
+
+  // Restrict access
+  if (vault.owner.toLowerCase() !== acct.toLowerCase()) {
+    throw new Error("Access Denied: This vault does not belong to your wallet");
+  }
+
+  return { data: { id: vaultId, ...vault } };
+},
+
 
   /* ========== FILE LIST IN A VAULT ========== */
   /* ========== FILE LIST IN A VAULT ========== */
